@@ -341,10 +341,10 @@ export default function Attendance() {
                     statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
                   } else if (status === 'إضافي') {
                     statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-                  } else if (status === 'راحة') {
-                    statusColor = 'bg-slate-50 text-slate-600 border-slate-200';
-                  } else if (status === 'مأمورية') {
+                  } else if (status === 'راحة' || status === 'OFF') {
                     statusColor = 'bg-blue-50 text-blue-700 border-blue-200';
+                  } else if (status === 'مأمورية') {
+                    statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
                   } else if (status.includes('إجازة') || status.includes('أجازة')) {
                     statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
                   }
@@ -385,8 +385,12 @@ export default function Attendance() {
                   let rowClass = "hover:bg-slate-50/80 transition-colors duration-150";
                   if (status === 'غائب' || status === 'غياب') {
                     rowClass = "bg-red-50/50 hover:bg-red-50 transition-colors duration-150";
-                  } else if (isEarlyDeparture || isShortHours) {
+                  } else if (status === 'تأخير' || isEarlyDeparture || isShortHours) {
                     rowClass = "bg-yellow-50/50 hover:bg-yellow-50 transition-colors duration-150";
+                  } else if (status === 'راحة' || status === 'إجازة' || status === 'OFF') {
+                    rowClass = "bg-blue-50/50 hover:bg-blue-50 transition-colors duration-150";
+                  } else if (status === 'مأمورية' || status === 'حاضر' || status === 'مكتمل' || status === 'إضافي') {
+                    rowClass = "bg-emerald-50/50 hover:bg-emerald-50 transition-colors duration-150";
                   }
 
                   return (

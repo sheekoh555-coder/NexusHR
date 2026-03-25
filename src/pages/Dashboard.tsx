@@ -139,9 +139,33 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold text-slate-900 tracking-tight">لوحة القيادة</h1>
-        <p className="mt-2 text-base text-slate-500">نظرة عامة على نشاط الموارد البشرية اليوم.</p>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-900 tracking-tight">لوحة القيادة</h1>
+          <p className="mt-2 text-base text-slate-500">نظرة عامة على نشاط الموارد البشرية اليوم.</p>
+        </div>
+      </div>
+
+      {/* Big Action Buttons */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <a href="/attendance" className="flex items-center justify-center gap-3 bg-blue-600 hover:bg-blue-700 text-white p-6 rounded-3xl shadow-sm transition-all duration-200 hover:shadow-md group">
+          <div className="bg-white/20 p-3 rounded-2xl group-hover:scale-110 transition-transform">
+            <Clock className="w-6 h-6 text-white" />
+          </div>
+          <span className="text-lg font-bold">رفع ملف الحضور (Excel)</span>
+        </a>
+        <a href="/payroll" className="flex items-center justify-center gap-3 bg-emerald-600 hover:bg-emerald-700 text-white p-6 rounded-3xl shadow-sm transition-all duration-200 hover:shadow-md group">
+          <div className="bg-white/20 p-3 rounded-2xl group-hover:scale-110 transition-transform">
+            <Calculator className="w-6 h-6 text-white" />
+          </div>
+          <span className="text-lg font-bold">معالجة الرواتب</span>
+        </a>
+        <a href="/payroll" className="flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-700 text-white p-6 rounded-3xl shadow-sm transition-all duration-200 hover:shadow-md group">
+          <div className="bg-white/20 p-3 rounded-2xl group-hover:scale-110 transition-transform">
+            <Briefcase className="w-6 h-6 text-white" />
+          </div>
+          <span className="text-lg font-bold">تصدير التقارير</span>
+        </a>
       </div>
 
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">

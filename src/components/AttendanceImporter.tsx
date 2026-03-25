@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabase';
 import { PreviewRecord, Profile, Leave, SystemSettings } from '../types';
@@ -11,6 +12,7 @@ interface AttendanceImporterProps {
 }
 
 export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImporterProps) {
+  const navigate = useNavigate();
   const [isDragging, setIsDragging] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -117,8 +119,22 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
       // Parse to JSON with header: 1 to get array of arrays
       const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
       
-      // Skip header row (index 0) and empty rows
-      const rows = json.slice(1).filter(row => row.length > 0 && row[0]);
+      // Auto-Mapping Engine: Detect column A (ID), E (Date), G (In), H (Out), and J (Status)
+      const colMap = {
+        empId: 0, // A
+        firstName: 1, // B
+        lastName: 2, // C
+        dept: 3, // D
+        date: 4, // E
+        weekday: 5, // F
+        in: 6, // G
+        out: 7, // H
+        total: 8, // I
+        notes: 9 // J
+      };
+
+      // Skip header row and empty rows
+      const rows = json.slice(1).filter(row => row.length > 0 && row[colMap.empId]);
       
       if (rows.length === 0) {
         toast.error('الملف فارغ أو لا يحتوي على بيانات صحيحة');
@@ -132,19 +148,18 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
       const profilesMap = new Map<string, any>();
 
       rows.forEach(row => {
-        // A (ID), B (First Name), C (Last Name), D (Dept), E (Date), F (Weekday), G (In), H (Out), I (Total), J (Notes)
-        const empId = String(row[0] || '').trim();
-        const firstName = String(row[1] || '').trim();
-        const lastName = String(row[2] || '').trim();
-        const dept = String(row[3] || '').trim();
+        const empId = String(row[colMap.empId] || '').trim();
+        const firstName = String(row[colMap.firstName] || '').trim();
+        const lastName = String(row[colMap.lastName] || '').trim();
+        const dept = String(row[colMap.dept] || '').trim();
         
-        // Handle Date (Column E)
+        // Handle Date
         let dateStr = '';
-        if (typeof row[4] === 'number') {
-           const dateObj = XLSX.SSF.parse_date_code(row[4]);
+        if (typeof row[colMap.date] === 'number') {
+           const dateObj = XLSX.SSF.parse_date_code(row[colMap.date]);
            dateStr = `${dateObj.y}-${String(dateObj.m).padStart(2, '0')}-${String(dateObj.d).padStart(2, '0')}`;
         } else {
-           dateStr = String(row[4] || '').trim();
+           dateStr = String(row[colMap.date] || '').trim();
            // Attempt basic normalization if it's DD/MM/YYYY
            if (dateStr.includes('/')) {
              const parts = dateStr.split('/');
@@ -155,9 +170,9 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
            }
         }
 
-        const weekday = String(row[5] || '').trim();
+        const weekday = String(row[colMap.weekday] || '').trim();
 
-        // Handle Time (Columns G, H)
+        // Handle Time
         const formatExcelTime = (val: any) => {
           if (val === undefined || val === null || val === '') return null;
           if (typeof val === 'number') {
@@ -171,20 +186,27 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
           return strVal;
         };
 
-        const firstPunchRaw = formatExcelTime(row[6]);
-        const lastPunchRaw = formatExcelTime(row[7]);
-        const notes = String(row[9] || '').trim();
+        const firstPunchRaw = formatExcelTime(row[colMap.in]);
+        const lastPunchRaw = formatExcelTime(row[colMap.out]);
+        const notes = String(row[colMap.notes] || '').trim();
+        const totalRaw = row[colMap.total];
 
-        // Smart Parsing
+        // Smart Parsing & Context Awareness
         let status = 'حاضر';
         let is_absent = false;
         
-        if (notes.toUpperCase().includes('OFF')) {
-          status = 'راحة';
-        } else if (notes.includes('مأمورية')) {
+        const isFriday = weekday.toLowerCase().includes('fri') || weekday.includes('جمعة');
+        const isOff = notes.toUpperCase().includes('OFF') || isFriday;
+        const isMission = notes.includes('مأمورية');
+        const isTotalMissing = totalRaw === undefined || totalRaw === null || String(totalRaw).trim() === '';
+
+        if (isOff) {
+          status = 'OFF';
+        } else if (isMission) {
           status = 'مأمورية';
-        } else if (notes.includes('أجازة') || notes.includes('إجازة')) {
-          status = 'إجازة';
+        } else if (isTotalMissing) {
+          status = 'غياب';
+          is_absent = true;
         } else if (!firstPunchRaw && !lastPunchRaw) {
           status = 'غياب';
           is_absent = true;
@@ -203,7 +225,7 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
         let firstPunch = firstPunchRaw;
         let lastPunch = lastPunchRaw;
 
-        if (['مأمورية', 'راحة', 'إجازة'].includes(status)) {
+        if (['مأمورية', 'OFF', 'إجازة'].includes(status)) {
           firstPunch = defaultStart;
           lastPunch = defaultEnd;
         }
@@ -236,9 +258,9 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
           weekday: weekday,
           first_punch: firstPunch,
           last_punch: lastPunch,
-          total_hours: metrics.total_hours,
-          late_minutes: metrics.late_minutes,
-          overtime_minutes: metrics.overtime_minutes,
+          total_hours: is_absent ? 0 : metrics.total_hours,
+          late_minutes: is_absent ? 0 : metrics.late_minutes,
+          overtime_minutes: is_absent ? 0 : metrics.overtime_minutes,
           status: status,
           notes: notes,
           is_absent: is_absent,
@@ -301,6 +323,7 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
 
       toast.success('تمت المزامنة والمعالجة بنجاح ✅', { id: 'sync-toast' });
       onSuccess();
+      navigate('/dashboard');
     } catch (error: any) {
       console.error('Error saving imported data:', error);
       const errorMsg = error.message === 'Request timeout' ? 'انتهى وقت الطلب. يرجى المحاولة مرة أخرى.' : 'حدث خطأ أثناء حفظ البيانات ❌';
@@ -332,7 +355,7 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
               className="inline-flex items-center px-5 py-2.5 border border-transparent text-sm font-bold rounded-2xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all disabled:opacity-50"
             >
               <RefreshCw className={`w-5 h-5 ml-2 ${saving ? 'animate-spin' : ''}`} />
-              {saving ? 'جاري المزامنة...' : 'مزامنة ومعالجة'}
+              {saving ? 'جاري التحديث...' : 'تحديث ومعالجة شاملة'}
             </button>
           </div>
         </div>
@@ -356,10 +379,14 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
                 {previewData.map((record, idx) => {
                   // Smart Colors Logic
                   let rowClass = "hover:bg-slate-50/80 transition-colors duration-150";
-                  if (record.is_absent) {
+                  if (record.is_absent || record.status === 'غياب') {
                     rowClass = "bg-red-50/50 hover:bg-red-50 transition-colors duration-150";
-                  } else if (record.is_early_departure || record.short_hours) {
+                  } else if (record.status === 'تأخير' || record.is_early_departure || record.short_hours) {
                     rowClass = "bg-yellow-50/50 hover:bg-yellow-50 transition-colors duration-150";
+                  } else if (record.status === 'OFF') {
+                    rowClass = "bg-blue-50/50 hover:bg-blue-50 transition-colors duration-150";
+                  } else if (record.status === 'مأمورية' || record.status === 'حاضر' || record.status === 'مكتمل' || record.status === 'إضافي') {
+                    rowClass = "bg-emerald-50/50 hover:bg-emerald-50 transition-colors duration-150";
                   }
 
                   return (
@@ -394,7 +421,8 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
                           record.status === 'غياب' ? 'bg-red-100 text-red-800' :
                           record.status === 'تأخير' ? 'bg-amber-100 text-amber-800' :
                           record.status === 'إضافي' ? 'bg-blue-100 text-blue-800' :
-                          record.status === 'مأمورية' ? 'bg-indigo-100 text-indigo-800' :
+                          record.status === 'مأمورية' ? 'bg-emerald-100 text-emerald-800' :
+                          record.status === 'OFF' ? 'bg-blue-100 text-blue-800' :
                           'bg-slate-100 text-slate-800'
                         }`}>
                           {record.status}
@@ -429,13 +457,14 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
       <div className="bg-blue-50/50 border border-blue-100 rounded-3xl p-5 mb-8 flex items-start gap-4">
         <AlertCircle className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" />
         <div className="text-sm text-blue-900">
-          <p className="font-bold text-base mb-1">المحرك الذكي (Smart Engine):</p>
+          <p className="font-bold text-base mb-1">استيراد ذكي بدون إعدادات (Zero-Configuration):</p>
           <p className="mb-2">يقوم النظام تلقائياً بـ:</p>
           <ul className="list-disc list-inside space-y-1 font-medium">
+            <li>التعرف على الأعمدة تلقائياً (Employee, Date, Punch, OFF, إلخ).</li>
             <li>حساب التأخير والإضافي بناءً على إعدادات الشركة.</li>
             <li>تطبيق مواعيد رمضان تلقائياً إذا كانت الملاحظات تحتوي على "رمضان".</li>
-            <li>ملء أوقات الحضور والانصراف تلقائياً لحالات (مأمورية، OFF، إجازة).</li>
-            <li>تلوين الصفوف: <span className="text-red-600 font-bold">أحمر للغياب</span>، <span className="text-yellow-600 font-bold">أصفر للانصراف المبكر</span>.</li>
+            <li>ملء أوقات الحضور والانصراف تلقائياً لحالات (مأمورية، OFF، إجازة) وتحديد يوم الجمعة كـ OFF تلقائياً.</li>
+            <li>تلوين الصفوف: <span className="text-red-600 font-bold">أحمر للغياب</span>، <span className="text-yellow-600 font-bold">أصفر للانصراف المبكر</span>، <span className="text-blue-600 font-bold">أزرق للمأموريات والراحة</span>.</li>
           </ul>
         </div>
       </div>
