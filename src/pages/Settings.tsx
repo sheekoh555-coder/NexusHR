@@ -37,10 +37,10 @@ export default function Settings() {
         // Format times to HH:mm
         setSettings({
           ...data,
-          work_start_time: data.work_start_time.substring(0, 5),
-          work_end_time: data.work_end_time.substring(0, 5),
-          ramadan_start_time: data.ramadan_start_time.substring(0, 5),
-          ramadan_end_time: data.ramadan_end_time.substring(0, 5),
+          work_start_time: data.work_start_time?.substring(0, 5) || '08:00',
+          work_end_time: data.work_end_time?.substring(0, 5) || '16:00',
+          ramadan_start_time: data.ramadan_start_time?.substring(0, 5) || '08:00',
+          ramadan_end_time: data.ramadan_end_time?.substring(0, 5) || '14:00',
         });
       }
     } catch (error) {

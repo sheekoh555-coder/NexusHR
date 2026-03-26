@@ -67,8 +67,8 @@ export default function Attendance() {
     let endStr = isRamadan ? '14:00' : '16:00';
     
     if (settings) {
-      startStr = isRamadan ? settings.ramadan_start_time.substring(0, 5) : settings.work_start_time.substring(0, 5);
-      endStr = isRamadan ? settings.ramadan_end_time.substring(0, 5) : settings.work_end_time.substring(0, 5);
+      startStr = isRamadan ? settings.ramadan_start_time?.substring(0, 5) || '08:00' : settings.work_start_time?.substring(0, 5) || '08:00';
+      endStr = isRamadan ? settings.ramadan_end_time?.substring(0, 5) || '14:00' : settings.work_end_time?.substring(0, 5) || '16:00';
     }
 
     const parseTime = (timeStr: string) => {
@@ -355,8 +355,8 @@ export default function Attendance() {
                   let endStr = isRamadan ? '14:00' : '16:00';
                   
                   if (settings) {
-                    startStr = isRamadan ? settings.ramadan_start_time.substring(0, 5) : settings.work_start_time.substring(0, 5);
-                    endStr = isRamadan ? settings.ramadan_end_time.substring(0, 5) : settings.work_end_time.substring(0, 5);
+                    startStr = isRamadan ? settings.ramadan_start_time?.substring(0, 5) || '08:00' : settings.work_start_time?.substring(0, 5) || '08:00';
+                    endStr = isRamadan ? settings.ramadan_end_time?.substring(0, 5) || '14:00' : settings.work_end_time?.substring(0, 5) || '16:00';
                   }
 
                   const parseTime = (timeStr: string) => {

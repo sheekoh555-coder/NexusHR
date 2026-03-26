@@ -15,6 +15,7 @@ export type Profile = {
   first_name?: string;
   last_name?: string;
   department?: string;
+  job_title?: string;
   photo_url?: string;
   base_salary: number;
   created_at: string;

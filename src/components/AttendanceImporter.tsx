@@ -2,8 +2,8 @@ import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabase';
-import { PreviewRecord, Profile, Leave, SystemSettings } from '../types';
-import { UploadCloud, FileSpreadsheet, CheckCircle2, XCircle, AlertCircle, ArrowRight, RefreshCw } from 'lucide-react';
+import { PreviewRecord } from '../types';
+import { UploadCloud, FileSpreadsheet, XCircle, AlertCircle, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 interface AttendanceImporterProps {
@@ -19,7 +19,6 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
   const [previewData, setPreviewData] = useState<PreviewRecord[]>([]);
   const [profilesToUpsert, setProfilesToUpsert] = useState<any[]>([]);
   const [showPreview, setShowPreview] = useState(false);
-  const [sysSettings, setSysSettings] = useState<SystemSettings | null>(null);
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -45,134 +44,80 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
     }
   };
 
-  const calculateMetrics = (first: string | null, last: string | null, notes: string, settings: SystemSettings | null) => {
-    let late_minutes = 0;
-    let total_hours = 0;
-    let overtime_minutes = 0;
-    let is_early_departure = false;
-    let short_hours = false;
-
-    const isRamadan = notes.includes('رمضان') || notes.includes('أول يوم رمضان');
-    
-    // Default values if settings not loaded
-    let startStr = isRamadan ? '09:00' : '08:00';
-    let endStr = isRamadan ? '15:00' : '16:00';
-    
-    if (settings) {
-      startStr = isRamadan ? settings.ramadan_start_time.substring(0, 5) : settings.work_start_time.substring(0, 5);
-      endStr = isRamadan ? settings.ramadan_end_time.substring(0, 5) : settings.work_end_time.substring(0, 5);
-    }
-
-    const parseTime = (timeStr: string) => {
-      const [h, m] = timeStr.split(':').map(Number);
-      return h * 60 + m;
-    };
-
-    const standardStartMins = parseTime(startStr);
-    const standardEndMins = parseTime(endStr);
-    const requiredHours = (standardEndMins - standardStartMins) / 60;
-
-    if (first) {
-      const firstPunchMins = parseTime(first);
-      late_minutes = Math.max(0, firstPunchMins - standardStartMins);
-
-      if (last) {
-        const lastPunchMins = parseTime(last);
-        
-        total_hours = Math.max(0, (lastPunchMins - firstPunchMins) / 60);
-        
-        overtime_minutes = Math.max(0, lastPunchMins - standardEndMins);
-        
-        if (lastPunchMins < standardEndMins) {
-          is_early_departure = true;
-        }
-        
-        if (total_hours < requiredHours) {
-          short_hours = true;
-        }
-      }
-    }
-
-    return { late_minutes, total_hours, overtime_minutes, is_early_departure, short_hours, is_ramadan: isRamadan, startStr, endStr };
-  };
-
   const handleFile = async (file: File) => {
+    // Validate file type
+    const validTypes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'text/csv'
+    ];
+    if (!validTypes.includes(file.type) && !file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
+      toast.error('يرجى رفع ملف Excel صالح (.xlsx أو .xls)');
+      return;
+    }
+
     setProcessing(true);
     try {
-      // Fetch settings first
-      let fetchedSettings: SystemSettings | null = null;
-      try {
-        const { data: settingsData } = await supabase.from('system_settings').select('*').eq('id', 1).single();
-        if (settingsData) {
-          fetchedSettings = settingsData as SystemSettings;
-          setSysSettings(fetchedSettings);
-        }
-      } catch (e) {
-        console.warn('Could not fetch settings, using defaults', e);
-      }
-
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       
-      // Parse to JSON with header: 1 to get array of arrays
-      const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+      const json = XLSX.utils.sheet_to_json(worksheet) as any[];
       
-      // Auto-Mapping Engine: Detect column A (ID), E (Date), G (In), H (Out), and J (Status)
-      const colMap = {
-        empId: 0, // A
-        firstName: 1, // B
-        lastName: 2, // C
-        dept: 3, // D
-        date: 4, // E
-        weekday: 5, // F
-        in: 6, // G
-        out: 7, // H
-        total: 8, // I
-        notes: 9 // J
-      };
-
-      // Skip header row and empty rows
-      const rows = json.slice(1).filter(row => row.length > 0 && row[colMap.empId]);
-      
-      if (rows.length === 0) {
+      if (json.length === 0) {
         toast.error('الملف فارغ أو لا يحتوي على بيانات صحيحة');
         setProcessing(false);
         return;
       }
 
-      toast.loading('جاري معالجة وحفظ البيانات...', { id: 'import-toast' });
+      // Validate columns
+      const firstRow = json[0];
+      const hasRequiredColumns = 
+        ('Employee Name' in firstRow || 'اسم الموظف' in firstRow) &&
+        ('Date' in firstRow || 'التاريخ' in firstRow) &&
+        ('Check In' in firstRow || 'الحضور' in firstRow) &&
+        ('Check Out' in firstRow || 'الانصراف' in firstRow);
+
+      if (!hasRequiredColumns) {
+        toast.error('الملف لا يحتوي على الأعمدة المطلوبة: Employee Name, Date, Check In, Check Out');
+        setProcessing(false);
+        return;
+      }
+
+      toast.loading('جاري معالجة البيانات...', { id: 'import-toast' });
+
+      // Fetch existing profiles to map names to IDs
+      const { data: existingProfiles } = await supabase.from('profiles').select('employee_id, full_name');
+      const profileMap = new Map<string, string>();
+      if (existingProfiles) {
+        existingProfiles.forEach(p => {
+          if (p.full_name) profileMap.set(p.full_name.trim().toLowerCase(), p.employee_id);
+        });
+      }
 
       const previewResults: PreviewRecord[] = [];
       const profilesMap = new Map<string, any>();
 
-      rows.forEach(row => {
-        const empId = String(row[colMap.empId] || '').trim();
-        const firstName = String(row[colMap.firstName] || '').trim();
-        const lastName = String(row[colMap.lastName] || '').trim();
-        const dept = String(row[colMap.dept] || '').trim();
-        
-        // Handle Date
+      json.forEach(row => {
+        const empName = String(row['Employee Name'] || row['اسم الموظف'] || '').trim();
+        if (!empName) return; // Skip empty rows
+
         let dateStr = '';
-        if (typeof row[colMap.date] === 'number') {
-           const dateObj = XLSX.SSF.parse_date_code(row[colMap.date]);
+        const rawDate = row['Date'] || row['التاريخ'];
+        if (typeof rawDate === 'number') {
+           const dateObj = XLSX.SSF.parse_date_code(rawDate);
            dateStr = `${dateObj.y}-${String(dateObj.m).padStart(2, '0')}-${String(dateObj.d).padStart(2, '0')}`;
         } else {
-           dateStr = String(row[colMap.date] || '').trim();
-           // Attempt basic normalization if it's DD/MM/YYYY
+           dateStr = String(rawDate || '').trim();
            if (dateStr.includes('/')) {
              const parts = dateStr.split('/');
              if (parts.length === 3) {
-               // Assuming DD/MM/YYYY for Arabic/European format
                dateStr = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
              }
            }
         }
 
-        const weekday = String(row[colMap.weekday] || '').trim();
-
-        // Handle Time
         const formatExcelTime = (val: any) => {
           if (val === undefined || val === null || val === '') return null;
           if (typeof val === 'number') {
@@ -186,86 +131,81 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
           return strVal;
         };
 
-        const firstPunchRaw = formatExcelTime(row[colMap.in]);
-        const lastPunchRaw = formatExcelTime(row[colMap.out]);
-        const notes = String(row[colMap.notes] || '').trim();
-        const totalRaw = row[colMap.total];
+        const checkIn = formatExcelTime(row['Check In'] || row['الحضور']);
+        const checkOut = formatExcelTime(row['Check Out'] || row['الانصراف']);
 
-        // Smart Parsing & Context Awareness
+        // Calculations
+        let total_hours = 0;
+        let late_minutes = 0;
+        let overtime_minutes = 0;
+        let is_early_departure = false;
+
+        const parseTime = (timeStr: string) => {
+          const [h, m] = timeStr.split(':').map(Number);
+          return h * 60 + m;
+        };
+
+        if (checkIn && checkOut) {
+          const inMins = parseTime(checkIn);
+          const outMins = parseTime(checkOut);
+          
+          total_hours = Math.max(0, (outMins - inMins) / 60);
+          
+          // Late if Check In > 09:00
+          if (inMins > parseTime('09:00')) {
+            late_minutes = inMins - parseTime('09:00');
+          }
+
+          // Early Leave if Check Out < 17:00
+          if (outMins < parseTime('17:00')) {
+            is_early_departure = true;
+          }
+
+          // Overtime if Check Out > 17:00
+          if (outMins > parseTime('17:00')) {
+            overtime_minutes = outMins - parseTime('17:00');
+          }
+        }
+
         let status = 'حاضر';
-        let is_absent = false;
-        
-        const isFriday = weekday.toLowerCase().includes('fri') || weekday.includes('جمعة');
-        const isOff = notes.toUpperCase().includes('OFF') || isFriday;
-        const isMission = notes.includes('مأمورية');
-        const isTotalMissing = totalRaw === undefined || totalRaw === null || String(totalRaw).trim() === '';
+        if (!checkIn && !checkOut) status = 'غياب';
+        else if (late_minutes > 0) status = 'تأخير';
+        else if (is_early_departure) status = 'انصراف مبكر';
+        else if (overtime_minutes > 0) status = 'إضافي';
 
-        if (isOff) {
-          status = 'OFF';
-        } else if (isMission) {
-          status = 'مأمورية';
-        } else if (isTotalMissing) {
-          status = 'غياب';
-          is_absent = true;
-        } else if (!firstPunchRaw && !lastPunchRaw) {
-          status = 'غياب';
-          is_absent = true;
+        // Map employee name to ID
+        let empId = profileMap.get(empName.toLowerCase());
+        if (!empId) {
+          // Generate a new ID if not found
+          empId = `EMP-${Math.floor(Math.random() * 10000)}`;
+          profileMap.set(empName.toLowerCase(), empId);
+          profilesMap.set(empId, {
+            employee_id: empId,
+            full_name: empName,
+            first_name: empName.split(' ')[0],
+            last_name: empName.split(' ').slice(1).join(' '),
+            base_salary: 0
+          });
         }
-
-        // Auto-Fill Logic
-        const isRamadan = notes.includes('رمضان') || notes.includes('أول يوم رمضان');
-        let defaultStart = isRamadan ? '09:00' : '08:00';
-        let defaultEnd = isRamadan ? '15:00' : '16:00';
-        
-        if (fetchedSettings) {
-          defaultStart = isRamadan ? fetchedSettings.ramadan_start_time.substring(0, 5) : fetchedSettings.work_start_time.substring(0, 5);
-          defaultEnd = isRamadan ? fetchedSettings.ramadan_end_time.substring(0, 5) : fetchedSettings.work_end_time.substring(0, 5);
-        }
-
-        let firstPunch = firstPunchRaw;
-        let lastPunch = lastPunchRaw;
-
-        if (['مأمورية', 'OFF', 'إجازة'].includes(status)) {
-          firstPunch = defaultStart;
-          lastPunch = defaultEnd;
-        }
-
-        const metrics = calculateMetrics(firstPunch, lastPunch, notes, fetchedSettings);
-        
-        if (status === 'حاضر') {
-           if (!lastPunch) status = 'في العمل';
-           else if (metrics.late_minutes > 0) status = 'تأخير';
-           else if (metrics.overtime_minutes > 0) status = 'إضافي';
-        }
-
-        const fullName = `${firstName} ${lastName}`.trim();
-
-        profilesMap.set(empId, {
-          employee_id: empId,
-          first_name: firstName,
-          last_name: lastName,
-          full_name: fullName || empId,
-          department: dept
-        });
 
         previewResults.push({
           employee_id: empId,
-          first_name: firstName,
-          last_name: lastName,
-          full_name: fullName || empId,
-          department: dept,
+          first_name: empName.split(' ')[0],
+          last_name: empName.split(' ').slice(1).join(' '),
+          full_name: empName,
+          department: '',
           date: dateStr,
-          weekday: weekday,
-          first_punch: firstPunch,
-          last_punch: lastPunch,
-          total_hours: is_absent ? 0 : metrics.total_hours,
-          late_minutes: is_absent ? 0 : metrics.late_minutes,
-          overtime_minutes: is_absent ? 0 : metrics.overtime_minutes,
+          weekday: '',
+          first_punch: checkIn,
+          last_punch: checkOut,
+          total_hours: total_hours,
+          late_minutes: late_minutes,
+          overtime_minutes: overtime_minutes,
           status: status,
-          notes: notes,
-          is_absent: is_absent,
-          is_early_departure: metrics.is_early_departure,
-          short_hours: metrics.short_hours
+          notes: '',
+          is_absent: !checkIn && !checkOut,
+          is_early_departure: is_early_departure,
+          short_hours: false
         });
       });
 
@@ -273,6 +213,7 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
       setProfilesToUpsert(Array.from(profilesMap.values()));
       setShowPreview(true);
       toast.dismiss('import-toast');
+      toast.success('تمت قراءة الملف بنجاح');
 
     } catch (error) {
       console.error('Error parsing file:', error);
@@ -284,7 +225,7 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
 
   const handleSyncAndProcess = async () => {
     setSaving(true);
-    toast.loading('جاري المزامنة والمعالجة...', { id: 'sync-toast' });
+    toast.loading('جاري حفظ البيانات...', { id: 'sync-toast' });
     try {
       const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error('Request timeout')), 15000)
@@ -321,7 +262,7 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
       const { error: attendanceError } = await Promise.race([attendancePromise, timeoutPromise]) as any;
       if (attendanceError) throw attendanceError;
 
-      toast.success('تمت المزامنة والمعالجة بنجاح ✅', { id: 'sync-toast' });
+      toast.success('تم حفظ بيانات الحضور بنجاح ✅', { id: 'sync-toast' });
       onSuccess();
       navigate('/dashboard');
     } catch (error: any) {
@@ -338,8 +279,8 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-8">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h2 className="text-2xl font-bold text-slate-900">مراجعة البيانات (المحرك الذكي)</h2>
-            <p className="text-sm text-slate-500 mt-1">تم تطبيق قواعد الحضور، المأموريات، ورمضان تلقائياً.</p>
+            <h2 className="text-2xl font-bold text-slate-900">مراجعة بيانات الحضور</h2>
+            <p className="text-sm text-slate-500 mt-1">تم احتساب التأخير، الانصراف المبكر، والوقت الإضافي تلقائياً.</p>
           </div>
           <div className="flex gap-3">
             <button
@@ -355,7 +296,7 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
               className="inline-flex items-center px-5 py-2.5 border border-transparent text-sm font-bold rounded-2xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all disabled:opacity-50"
             >
               <RefreshCw className={`w-5 h-5 ml-2 ${saving ? 'animate-spin' : ''}`} />
-              {saving ? 'جاري التحديث...' : 'تحديث ومعالجة شاملة'}
+              {saving ? 'جاري الحفظ...' : 'حفظ البيانات'}
             </button>
           </div>
         </div>
@@ -365,39 +306,34 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
             <table className="min-w-full divide-y divide-slate-100">
               <thead className="bg-slate-50/50 sticky top-0 z-10 backdrop-blur-sm">
                 <tr>
-                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">الموظف</th>
+                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">اسم الموظف</th>
                   <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">التاريخ</th>
-                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">حضور</th>
-                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">انصراف</th>
-                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">تأخير</th>
+                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">الحضور</th>
+                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">الانصراف</th>
+                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">ساعات العمل</th>
+                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">التأخير</th>
+                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">انصراف مبكر</th>
                   <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">إضافي</th>
-                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">الحالة</th>
-                  <th scope="col" className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">ملاحظات</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-slate-50">
                 {previewData.map((record, idx) => {
-                  // Smart Colors Logic
                   let rowClass = "hover:bg-slate-50/80 transition-colors duration-150";
                   if (record.is_absent || record.status === 'غياب') {
                     rowClass = "bg-red-50/50 hover:bg-red-50 transition-colors duration-150";
-                  } else if (record.status === 'تأخير' || record.is_early_departure || record.short_hours) {
+                  } else if (record.late_minutes > 0 || record.is_early_departure) {
                     rowClass = "bg-yellow-50/50 hover:bg-yellow-50 transition-colors duration-150";
-                  } else if (record.status === 'OFF') {
-                    rowClass = "bg-blue-50/50 hover:bg-blue-50 transition-colors duration-150";
-                  } else if (record.status === 'مأمورية' || record.status === 'حاضر' || record.status === 'مكتمل' || record.status === 'إضافي') {
+                  } else if (record.overtime_minutes > 0) {
                     rowClass = "bg-emerald-50/50 hover:bg-emerald-50 transition-colors duration-150";
                   }
 
                   return (
                     <tr key={idx} className={rowClass}>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-bold text-slate-900">{record.full_name}</div>
-                        <div className="text-xs text-slate-500 font-mono mt-0.5">{record.employee_id}</div>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-slate-900">
+                        {record.full_name}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-slate-900">{record.date}</div>
-                        <div className="text-xs text-slate-500 mt-0.5">{record.weekday}</div>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
+                        {record.date}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-mono font-medium text-slate-700">
                         {record.first_punch || '-'}
@@ -405,31 +341,23 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-mono font-medium text-slate-700">
                         {record.last_punch || '-'}
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-slate-700">
+                        {record.total_hours > 0 ? record.total_hours.toFixed(2) : '-'}
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`text-sm font-bold ${record.late_minutes > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
                           {record.late_minutes > 0 ? `${record.late_minutes} د` : '-'}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`text-sm font-bold ${record.overtime_minutes > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
-                          {record.overtime_minutes > 0 ? `${record.overtime_minutes} د` : '-'}
+                        <span className={`text-sm font-bold ${record.is_early_departure ? 'text-red-600' : 'text-slate-400'}`}>
+                          {record.is_early_departure ? 'نعم' : '-'}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold ${
-                          record.status === 'حاضر' ? 'bg-emerald-100 text-emerald-800' :
-                          record.status === 'غياب' ? 'bg-red-100 text-red-800' :
-                          record.status === 'تأخير' ? 'bg-amber-100 text-amber-800' :
-                          record.status === 'إضافي' ? 'bg-blue-100 text-blue-800' :
-                          record.status === 'مأمورية' ? 'bg-emerald-100 text-emerald-800' :
-                          record.status === 'OFF' ? 'bg-blue-100 text-blue-800' :
-                          'bg-slate-100 text-slate-800'
-                        }`}>
-                          {record.status}
+                        <span className={`text-sm font-bold ${record.overtime_minutes > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                          {record.overtime_minutes > 0 ? `${record.overtime_minutes} د` : '-'}
                         </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
-                        {record.notes || '-'}
                       </td>
                     </tr>
                   );
@@ -447,7 +375,7 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
       <div className="flex items-center justify-between mb-8">
         <div>
           <h2 className="text-2xl font-bold text-slate-900">استيراد سجلات الحضور</h2>
-          <p className="text-sm text-slate-500 mt-1">قم برفع ملف Excel أو CSV يحتوي على البصمات.</p>
+          <p className="text-sm text-slate-500 mt-1">قم برفع ملف Excel يحتوي على البصمات.</p>
         </div>
         <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors">
           <XCircle className="w-6 h-6" />
@@ -457,14 +385,13 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
       <div className="bg-blue-50/50 border border-blue-100 rounded-3xl p-5 mb-8 flex items-start gap-4">
         <AlertCircle className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" />
         <div className="text-sm text-blue-900">
-          <p className="font-bold text-base mb-1">استيراد ذكي بدون إعدادات (Zero-Configuration):</p>
-          <p className="mb-2">يقوم النظام تلقائياً بـ:</p>
+          <p className="font-bold text-base mb-1">تعليمات رفع الملف:</p>
           <ul className="list-disc list-inside space-y-1 font-medium">
-            <li>التعرف على الأعمدة تلقائياً (Employee, Date, Punch, OFF, إلخ).</li>
-            <li>حساب التأخير والإضافي بناءً على إعدادات الشركة.</li>
-            <li>تطبيق مواعيد رمضان تلقائياً إذا كانت الملاحظات تحتوي على "رمضان".</li>
-            <li>ملء أوقات الحضور والانصراف تلقائياً لحالات (مأمورية، OFF، إجازة) وتحديد يوم الجمعة كـ OFF تلقائياً.</li>
-            <li>تلوين الصفوف: <span className="text-red-600 font-bold">أحمر للغياب</span>، <span className="text-yellow-600 font-bold">أصفر للانصراف المبكر</span>، <span className="text-blue-600 font-bold">أزرق للمأموريات والراحة</span>.</li>
+            <li>يجب أن يكون الملف بصيغة Excel (.xlsx أو .xls).</li>
+            <li>يجب أن يحتوي الملف على الأعمدة التالية: <strong>Employee Name, Date, Check In, Check Out</strong>.</li>
+            <li>سيتم احتساب التأخير إذا كان الحضور بعد 09:00.</li>
+            <li>سيتم احتساب الانصراف المبكر إذا كان الانصراف قبل 17:00.</li>
+            <li>سيتم احتساب الوقت الإضافي إذا كان الانصراف بعد 17:00.</li>
           </ul>
         </div>
       </div>
@@ -481,7 +408,7 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
           <FileSpreadsheet className={`w-10 h-10 ${isDragging ? 'text-blue-600' : 'text-slate-400'}`} />
         </div>
         <h3 className="text-lg font-bold text-slate-900 mb-2">اسحب وأفلت الملف هنا</h3>
-        <p className="text-slate-500 text-sm mb-6">أو انقر لاختيار ملف من جهازك (Excel, CSV)</p>
+        <p className="text-slate-500 text-sm mb-6">أو انقر لاختيار ملف من جهازك (Excel)</p>
         
         <label className="cursor-pointer inline-flex items-center px-6 py-3 border border-transparent text-sm font-bold rounded-2xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all">
           <UploadCloud className="w-5 h-5 ml-2" />
@@ -498,3 +425,4 @@ export default function AttendanceImporter({ onClose, onSuccess }: AttendanceImp
     </div>
   );
 }
+

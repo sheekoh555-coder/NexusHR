@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
-import { Users, Clock, Calculator, LogOut, LayoutDashboard, Settings } from 'lucide-react';
+import { Users, Clock, Calculator, LogOut, LayoutDashboard, Settings, CalendarDays, Briefcase, Building2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -11,8 +11,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const navigation = [
     { name: 'الرئيسية', href: '/dashboard', icon: LayoutDashboard },
     { name: 'الموظفين', href: '/employees', icon: Users },
+    { name: 'التوظيف', href: '/recruitment', icon: Briefcase },
     { name: 'سجل البصمة', href: '/attendance', icon: Clock },
+    { name: 'الإجازات', href: '/leaves', icon: CalendarDays },
     { name: 'الرواتب', href: '/payroll', icon: Calculator },
+    { name: 'الأقسام', href: '/departments', icon: Building2 },
     { name: 'الإعدادات', href: '/settings', icon: Settings },
   ];
 
